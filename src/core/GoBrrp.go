@@ -15,8 +15,10 @@ var (
 	Basepath = filepath.Dir(f)
 )
 
-var ConfigsPath = Basepath + "\\src\\configs\\"
-var CertsPath = Basepath + "\\src\\certs\\"
+var (
+	ConfigsPath = Basepath + "\\src\\configs\\"
+	CertsPath = Basepath + "\\src\\certs\\"
+)
 
 type GoBrrp struct {
 	not_started   bool
