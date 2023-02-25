@@ -3,21 +3,20 @@ package core
 import (
 	"fmt"
 	"io/ioutil"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 )
 
 var (
-	f, _     = os.Getwd()
-	Basepath = filepath.Dir(f)
-)
-
-var (
+	f, _        = os.Getwd()
+	Basepath    = filepath.Dir(f)
 	ConfigsPath = Basepath + "\\src\\configs\\"
-	CertsPath = Basepath + "\\src\\certs\\"
+	CertsPath   = Basepath + "\\src\\certs\\"
 )
 
 type GoBrrp struct {
@@ -55,4 +54,60 @@ func (brrp GoBrrp) ParseConfig(ConfigName string) map[string]interface{} {
 	}
 
 	return config
+}
+
+func (brrp GoBrrp) resolveIp(network string, address string) (net.IP, int) {
+	if network == "udp" {
+		result, err := net.ResolveTCPAddr(network, address)
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		return result.IP, result.Port
+	} else {
+		result, err := net.ResolveTCPAddr(network, address)
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		return result.IP, result.Port
+	}
+}
+
+func (brrp GoBrrp) CreateSocketListener(SocketType string, ListenAddress string) syscall.Handle {
+	AVAILABLE_SOCKET_TYPES := map[string][2]int{
+		"tcp": {syscall.SOCK_STREAM, syscall.IPPROTO_TCP},
+		"udp": {syscall.SOCK_DGRAM, syscall.IPPROTO_UDP},
+	}
+
+	SocketType = strings.ToLower(SocketType)
+
+	selectedSocketType := AVAILABLE_SOCKET_TYPES[SocketType][0]
+	selectedProtocolType := AVAILABLE_SOCKET_TYPES[SocketType][1]
+
+	if selectedSocketType == 0 {
+		fmt.Println("Invalid socket type provided.")
+		return syscall.InvalidHandle
+	}
+
+	s, err := syscall.Socket(syscall.AF_INET, selectedSocketType, selectedProtocolType)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	err = syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	ip, port := brrp.resolveIp(SocketType, ListenAddress)
+
+	sa := &syscall.SockaddrInet4{
+		Port: port,
+		Addr: [4]byte{ip[0], ip[1], ip[2], ip[3]},
+	}
+
+	syscall.Bind(s, sa)
+
+	return s
 }

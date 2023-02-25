@@ -17,3 +17,8 @@ func TestConfigParsing() {
 	}
 
 }
+
+func TestSocketCreation() {
+	burrp := core.New()
+	burrp.CreateSocketListener("tcp", "34.74.100.4:8082")
+}
