@@ -1,0 +1,14 @@
+{
+    "Project": "Some Project",
+    "Hosts": [
+            {
+            "local": "127.0.0.1:2020",
+            "original": "34.210.171.95:2020",
+            "host_name": "test_host_name.net",
+            "protocol": "TCP",
+            "script_path": "processing/process.go:inner:outer",
+            "handshake": true
+        }
+    ]
+}
+

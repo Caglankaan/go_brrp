@@ -4,16 +4,67 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"os"
 	"time"
 )
 
-func GenerateRandomBigInt(numBits int) (*big.Int, error) {
+type CertificateAuthority struct {
+	CA       string
+	HostName string
+}
+
+func NewCA(CA string, hostName string) *CertificateAuthority {
+	if hostName == "" {
+		panic("Hostname should not be empty.")
+	}
+	if CA == "" {
+		CA = "rootCA"
+	}
+	keyPath := CertsPath + CA + ".key"
+
+	_, err := os.Stat(keyPath)
+
+	ca := &CertificateAuthority{
+		CA:       CA,
+		HostName: hostName,
+	}
+
+	if err != nil {
+		err := ca.createCACertificate(CertsPath+CA+".pem", CertsPath+CA+".key")
+		if err != nil {
+			fmt.Println("err: ", err)
+			panic(err)
+		}
+	}
+
+	cert, key, err := ca.loadCert(CertsPath + CA)
+
+	if err != nil {
+		fmt.Println("err: ", err)
+		panic("err")
+	}
+
+	_, err = os.Stat(CertsPath + hostName + ".pem")
+	if err != nil {
+		err = ca.generateCert(hostName, cert, key)
+		if err != nil {
+			fmt.Println("err: ", err)
+			panic("err")
+		}
+		// TODO: rootCA.pem should be changed to rootCA.der and we should install it if we get unknown certificate error!!
+	}
+
+	return ca
+}
+func (ca CertificateAuthority) generateRandomBigInt(numBits int) (*big.Int, error) {
 	// Generate a random byte slice with the specified number of bits
 	numBytes := (numBits + 7) / 8
 	bytes := make([]byte, numBytes)
@@ -28,13 +79,13 @@ func GenerateRandomBigInt(numBits int) (*big.Int, error) {
 	return result, nil
 }
 
-func hashPublicKey(pub *rsa.PublicKey) []byte {
+func (ca CertificateAuthority) hashPublicKey(pub *rsa.PublicKey) []byte {
 	derBytes, _ := x509.MarshalPKIXPublicKey(pub)
 	hash := sha1.Sum(derBytes)
 	return hash[:]
 }
 
-func CreateCACertificate(certFile string, keyFile string) error {
+func (ca CertificateAuthority) createCACertificate(certFile string, keyFile string) error {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return err
@@ -44,13 +95,13 @@ func CreateCACertificate(certFile string, keyFile string) error {
 		CommonName: "My Root CA",
 	}
 
-	serialBigInt, err := GenerateRandomBigInt(25)
+	serialBigInt, err := ca.generateRandomBigInt(25)
 	template := x509.Certificate{
 		SerialNumber:          serialBigInt,
 		Subject:               subject,
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(10, 0, 0), // Valid for 10 years
-		SubjectKeyId:          hashPublicKey(&priv.PublicKey),
+		SubjectKeyId:          ca.hashPublicKey(&priv.PublicKey),
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		IsCA:                  true,
@@ -85,7 +136,7 @@ func CreateCACertificate(certFile string, keyFile string) error {
 	return nil
 }
 
-func LoadCert(name string) (*x509.Certificate, *rsa.PrivateKey, error) {
+func (ca CertificateAuthority) loadCert(name string) (*x509.Certificate, *rsa.PrivateKey, error) {
 	// Load certificate file
 	cf, err := os.Open(name + ".pem")
 	if err != nil {
@@ -120,7 +171,7 @@ func LoadCert(name string) (*x509.Certificate, *rsa.PrivateKey, error) {
 	return cert, key, nil
 }
 
-func GenerateCert(hostname string, caCert *x509.Certificate, caKey *rsa.PrivateKey) error {
+func (ca CertificateAuthority) generateCert(hostname string, caCert *x509.Certificate, caKey *rsa.PrivateKey) error {
 	// Generate a new RSA key pair
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -128,7 +179,7 @@ func GenerateCert(hostname string, caCert *x509.Certificate, caKey *rsa.PrivateK
 	}
 
 	// Create a new X.509 certificate template
-	serialBigInt, err := GenerateRandomBigInt(25)
+	serialBigInt, err := ca.generateRandomBigInt(25)
 	template := &x509.Certificate{
 		SerialNumber: serialBigInt,
 		Subject: pkix.Name{
@@ -136,7 +187,7 @@ func GenerateCert(hostname string, caCert *x509.Certificate, caKey *rsa.PrivateK
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		SubjectKeyId:          hashPublicKey(&priv.PublicKey),
+		SubjectKeyId:          ca.hashPublicKey(&priv.PublicKey),
 		AuthorityKeyId:        caCert.SubjectKeyId,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
@@ -167,4 +218,14 @@ func GenerateCert(hostname string, caCert *x509.Certificate, caKey *rsa.PrivateK
 	pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
 
 	return nil
+}
+
+func (ca CertificateAuthority) SSL_CONFIG() *tls.Config {
+	cert, err := tls.LoadX509KeyPair(CertsPath+ca.HostName+".pem", CertsPath+ca.HostName+".key")
+	if err != nil {
+		log.Fatal("Error loading certificate. ", err)
+		panic(err)
+	}
+
+	return &tls.Config{Certificates: []tls.Certificate{cert}}
 }

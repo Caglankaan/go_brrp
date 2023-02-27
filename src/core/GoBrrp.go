@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -19,18 +20,33 @@ var (
 	CertsPath   = Basepath + "\\src\\certs\\"
 )
 
+type HostConfig struct {
+	Local      string `json:"local"`
+	Original   string `json:"original"`
+	CertName   string `json:"cert_name"`
+	Protocol   string `json:"protocol"`
+	ScriptPath string `json:"script_path"`
+	Handshake  bool   `json:"handshake"`
+}
+
+type Config struct {
+	Project string       `json:"Project"`
+	Hosts   []HostConfig `json:"Hosts"`
+}
+
 type GoBrrp struct {
 	not_started   bool
 	asked_to_quit bool
 	is_stopped    bool
+	Config        Config
 }
 
-func New() *GoBrrp {
-	b := new(GoBrrp)
-
-	b.not_started = true
-	b.asked_to_quit = false
-	b.is_stopped = false
+func NewGoBrrp() *GoBrrp {
+	b := &GoBrrp{
+		not_started:   true,
+		asked_to_quit: false,
+		is_stopped:    false,
+	}
 
 	return b
 }
@@ -56,11 +72,35 @@ func (brrp GoBrrp) ParseConfig(ConfigName string) map[string]interface{} {
 	return config
 }
 
+func (brrp GoBrrp) ParseConfigJson(ConfigName string) Config {
+	fields := strings.Split(ConfigName, ".")
+	if len(fields) < 2 {
+		ConfigName += ".json"
+	}
+
+	data, err := ioutil.ReadFile(ConfigsPath + ConfigName)
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+
+	var config Config
+
+	err = json.Unmarshal(data, &config)
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+
+	return config
+}
+
 func (brrp GoBrrp) resolveIp(network string, address string) (net.IP, int) {
 	if network == "udp" {
-		result, err := net.ResolveTCPAddr(network, address)
+		result, err := net.ResolveUDPAddr(network, address)
 		if err != nil {
 			fmt.Println(err)
+			panic(err)
 		}
 
 		return result.IP, result.Port
@@ -68,6 +108,7 @@ func (brrp GoBrrp) resolveIp(network string, address string) (net.IP, int) {
 		result, err := net.ResolveTCPAddr(network, address)
 		if err != nil {
 			fmt.Println(err)
+			panic(err)
 		}
 
 		return result.IP, result.Port
@@ -93,11 +134,13 @@ func (brrp GoBrrp) CreateSocketListener(SocketType string, ListenAddress string)
 	s, err := syscall.Socket(syscall.AF_INET, selectedSocketType, selectedProtocolType)
 	if err != nil {
 		fmt.Println(err)
+		panic(err)
 	}
 
 	err = syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 	if err != nil {
 		fmt.Println(err)
+		panic(err)
 	}
 
 	ip, port := brrp.resolveIp(SocketType, ListenAddress)
