@@ -1,6 +1,8 @@
 package core
 
 import (
+	"GoBrrp/helper"
+	"GoBrrp/processing"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
@@ -8,14 +10,18 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"fmt"
 	"io"
 	"log"
 	"math/big"
 	"net"
 	"os"
-	"strings"
+	"os/exec"
+	"strconv"
+	"syscall"
 	"time"
+	"unsafe"
+
+	"github.com/sirupsen/logrus"
 )
 
 type CertificateAuthority struct {
@@ -44,7 +50,7 @@ func NewCA(CA string, hostName string, config HostConfig) *CertificateAuthority 
 	if err != nil {
 		err := ca.createCACertificate(CertsPath+CA+".pem", CertsPath+CA+".key")
 		if err != nil {
-			fmt.Println("err: ", err)
+			logrus.Debugln("err: ", err)
 			panic(err)
 		}
 	}
@@ -52,7 +58,7 @@ func NewCA(CA string, hostName string, config HostConfig) *CertificateAuthority 
 	cert, key, err := ca.loadCert(CertsPath + CA)
 
 	if err != nil {
-		fmt.Println("err: ", err)
+		logrus.Debugln("err: ", err)
 		panic("err")
 	}
 
@@ -60,11 +66,13 @@ func NewCA(CA string, hostName string, config HostConfig) *CertificateAuthority 
 	if err != nil {
 		err = ca.generateCert(hostName, cert, key)
 		if err != nil {
-			fmt.Println("err: ", err)
+			logrus.Debugln("err: ", err)
 			panic("err")
 		}
 		// TODO: rootCA.pem should be changed to rootCA.der and we should install it if we get unknown certificate error!!
 	}
+
+	//compilePath(ca.Hostconfig)
 
 	return ca
 }
@@ -246,7 +254,7 @@ func (ca CertificateAuthority) TcpProxy() {
 	}
 	//defer toProxyListener.Close()
 
-	fmt.Printf("%s Proxy Listens at %s\n", ca.Hostconfig.Protocol, ca.Hostconfig.Local)
+	logrus.Debugln(ca.Hostconfig.Protocol, "Proxy Listens at ", ca.Hostconfig.Local)
 
 	for true {
 		client, err := toProxyListener.Accept()
@@ -261,21 +269,21 @@ func (ca CertificateAuthority) TcpProxy() {
 			//defer client.Close()
 
 			_, port, _ := net.SplitHostPort(client.RemoteAddr().String())
-			fmt.Println("client.RemoteAddr().String(): ", client.RemoteAddr().String())
+			logrus.Debugln("client.RemoteAddr().String(): ", client.RemoteAddr().String())
 
 			if _, ok := clients[port]; !ok {
 				clients[port] = true
 
 				toServerConn, err := net.DialTimeout("tcp", ca.Hostconfig.Original, 10*time.Second)
 				if err != nil {
-					fmt.Printf("failed to connect to remote server: %s\n", err)
+					logrus.Debugln("failed to connect to remote server: %s\n", err)
 					return
 				}
 				//defer toServerConn.Close()
 
 				toProxySSLSocket, toServerConn, err := ca.ssl_tls_handshake(client, toServerConn)
 				if err != nil {
-					fmt.Println("Err is: ", err)
+					logrus.Debugln("Err is: ", err)
 					panic(err)
 				}
 
@@ -288,13 +296,93 @@ func (ca CertificateAuthority) TcpProxy() {
 				// 	},
 				// })
 
-				toProxySSLSocket.SetDeadline(time.Now().Add(5 * time.Second))
-				toServerConn.SetDeadline(time.Now().Add(5 * time.Second))
+				//toProxySSLSocket.SetDeadline(time.Now().Add(5 * time.Second))
+				//toServerConn.SetDeadline(time.Now().Add(5 * time.Second))
 
-				go clientHandler(toProxySSLSocket, toServerConn)
+				go connectionHandler(toProxySSLSocket, toServerConn, true)
+				go connectionHandler(toServerConn, toProxySSLSocket, false)
+				//go clientHandler(toProxySSLSocket, toServerConn)
 			}
 		}(client)
 	}
+}
+
+func compilePath(config HostConfig) {
+	//Here is for DLL, dll is not working??
+
+	// if config.CompileSO {
+	// 	parts = strings.Split(config.ScriptPath, ":")
+	// 	sourcePath := Basepath + parts[0]
+	// 	binaryPath = Basepath + strings.Replace(parts[0], ".go", ".dll", -1)
+	// 	logrus.Debugln("binary path: ", binaryPath)
+	// 	logrus.Debugln("sourcePath path: ", sourcePath)
+
+	// 	cmd := exec.Command("go", "build", "-o", binaryPath, "-buildmode=c-shared", sourcePath)
+	// 	err := cmd.Run()
+
+	// 	if err != nil {
+	// 		logrus.Debugln("Error compiling plugin: %v\n", err)
+	// 		return
+	// 	}
+
+	// 	logrus.Debugln("Plugin compiled successfully to %s\n", binaryPath)
+	// }
+
+	//Here is for Exe
+	// if config.CompileSO {
+	// 	parts = strings.Split(config.ScriptPath, ":")
+	// 	sourcePath := Basepath + parts[0]
+	// 	binaryPath = Basepath + strings.Replace(parts[0], ".go", ".exe", -1)
+	// 	logrus.Debugln("binary path: ", binaryPath)
+	// 	logrus.Debugln("sourcePath path: ", sourcePath)
+
+	// 	cmd := exec.Command("go", "build", "-o", binaryPath, sourcePath)
+	// 	err := cmd.Run()
+
+	// 	if err != nil {
+	// 		logrus.Debugln("Error compiling plugin: %v\n", err)
+	// 		return
+	// 	}
+
+	// 	logrus.Debugln("Plugin compiled successfully to %s\n", binaryPath)
+	// 	logrus.Debugln("runExeExample(binaryPath, true): ", runExeExample(binaryPath, true))
+	// }
+}
+
+func runExeExample(binaryPath string, inner bool) []byte {
+	x := []byte("This is my test")
+	cmd := exec.Command(binaryPath, strconv.FormatBool(inner), string(x))
+
+	// Run the command and get the output
+	output, err := cmd.Output()
+	if err != nil {
+		logrus.Debugln(err.Error())
+		panic(err)
+	}
+
+	// Print the output
+	//logrus.Debugln("output is: ", string(output))
+	return output
+}
+
+// TODO: its not working, why?
+func runDllExample(binaryPath string) []byte {
+	dll, err := syscall.LoadDLL(binaryPath)
+	if err != nil {
+		panic(err)
+	}
+	defer dll.Release()
+
+	proc, err := dll.FindProc("inner")
+	if err != nil {
+		panic(err)
+	}
+
+	innerFunc := *(*func([]byte) []byte)(unsafe.Pointer(&proc))
+
+	result := innerFunc([]byte("test"))
+	logrus.Debugln(string(result))
+	return result
 }
 
 func readConn(conn net.Conn) <-chan []byte {
@@ -303,7 +391,7 @@ func readConn(conn net.Conn) <-chan []byte {
 		buffer := make([]byte, 640000)
 		n, err := conn.Read(buffer)
 		if err != nil {
-			fmt.Println("err: ", err)
+			logrus.Debugln("err: ", err)
 			return
 		}
 		ch <- buffer[:n]
@@ -311,69 +399,105 @@ func readConn(conn net.Conn) <-chan []byte {
 	return ch
 }
 
-func clientHandler(toProxySocket net.Conn, toServerSocket net.Conn) {
-	//var closeToProxySocket bool
+func connectionHandler(IncomingSocket net.Conn, OutgoingSocket net.Conn, incoming bool) {
 	for {
-		// select {
-		// case <-askedToQuit:
-		// 	return
-		// default:
-		//readSet := []net.Conn{toProxySocket, toServerSocket}
-		//writeSet := []net.Conn{}
-		//_, err := netutil.Poll(readSet, writeSet, time.Second)
-		// if err != nil {
-		// 	return
+		data := make([]byte, 640000)
+		n, err := IncomingSocket.Read(data)
+		// if err != nil || n == 0 {
+		// 	//closeToProxySocket = true
+		// 	logrus.Debugln("Err is not nil. Err: ", err)
+		// 	//break
 		// }
-		//readable, _, _ := selectChannels([]net.Conn{toProxySocket, toServerSocket}, nil, nil, 5*time.Second)
-		// if true {
 
-		// 	data := make([]byte, 640000)
-		// 	_, err := toServerSocket.Read(data)
-		// 	if err != nil {
-		// 		fmt.Println("Error reading data from server socket: ", err)
-		// 		break
-		// 	}
-		// 	toProxySocket.Write(data)
-		// }
-		// select {
-		// case data := <-readConn(toProxySocket):
-		data1 := make([]byte, 640000)
-		n, err := toProxySocket.Read(data1)
-		if err != nil || n == 0 {
-			//closeToProxySocket = true
-			fmt.Println("closetoproxysocket broken. Err: ", err)
-			break
-		}
-		//TODO: play with data
-		fmt.Println("data1: ", ByteArrayToString(data1[:n]))
-		_, err = toServerSocket.Write(data1[:n])
-		if err != nil {
-			fmt.Println("err: ", err)
-			return
-		}
-		//case data := <-readConn(toServerSocket):
-		fmt.Println("toserversocket if?")
-		data2 := make([]byte, 640000)
-		n, err = toServerSocket.Read(data2)
-		if err != nil || n == 0 {
-			//closeToProxySocket = true
-			fmt.Println("toServerSocket broken. Err: ", err)
-			break
-		}
-		fmt.Println("data2: ", ByteArrayToString(data2[:n]))
 		//TODO: play with data
 
-		_, err = toProxySocket.Write(data2[:n])
-		if err != nil {
-			fmt.Println("err: ", err)
-			return
-		}
+		if err == nil {
+			new_data := []byte{}
 
-		// case <-time.After(1 * time.Second):
-		// 	fmt.Println("Timeout reached")
-		// 	return
-		// }
+			if incoming {
+				new_data = processing.Inner(data[:n])
+			} else {
+				new_data = processing.Outer(data[:n])
+			}
+
+			logrus.Debugln("new_data: ", helper.PrintByteArray(new_data))
+
+			_, err = OutgoingSocket.Write(new_data)
+			if err != nil {
+				logrus.Debugln("err: ", err)
+				return
+			}
+		}
 	}
+}
+
+func clientHandler(toProxySocket net.Conn, toServerSocket net.Conn) {
+	// go connectionHandler(toProxySocket, toServerSocket)
+
+	// go connectionHandler(toServerSocket, toProxySocket)
+
+	// //var closeToProxySocket bool
+	// for {
+	// 	// select {
+	// 	// case <-askedToQuit:
+	// 	// 	return
+	// 	// default:
+	// 	//readSet := []net.Conn{toProxySocket, toServerSocket}
+	// 	//writeSet := []net.Conn{}
+	// 	//_, err := netutil.Poll(readSet, writeSet, time.Second)
+	// 	// if err != nil {
+	// 	// 	return
+	// 	// }
+	// 	//readable, _, _ := selectChannels([]net.Conn{toProxySocket, toServerSocket}, nil, nil, 5*time.Second)
+	// 	// if true {
+
+	// 	// 	data := make([]byte, 640000)
+	// 	// 	_, err := toServerSocket.Read(data)
+	// 	// 	if err != nil {
+	// 	// 		logrus.Debugln("Error reading data from server socket: ", err)
+	// 	// 		break
+	// 	// 	}
+	// 	// 	toProxySocket.Write(data)
+	// 	// }
+	// 	// select {
+	// 	// case data := <-readConn(toProxySocket):
+	// 	data1 := make([]byte, 640000)
+	// 	n, err := toProxySocket.Read(data1)
+	// 	if err != nil || n == 0 {
+	// 		//closeToProxySocket = true
+	// 		logrus.Debugln("closetoproxysocket broken. Err: ", err)
+	// 		break
+	// 	}
+	// 	//TODO: play with data
+	// 	logrus.Debugln("data1: ", ByteArrayToString(data1[:n]))
+	// 	_, err = toServerSocket.Write(data1[:n])
+	// 	if err != nil {
+	// 		logrus.Debugln("err: ", err)
+	// 		return
+	// 	}
+	// 	//case data := <-readConn(toServerSocket):
+	// 	logrus.Debugln("toserversocket if?")
+	// 	data2 := make([]byte, 640000)
+	// 	n, err = toServerSocket.Read(data2)
+	// 	if err != nil || n == 0 {
+	// 		//closeToProxySocket = true
+	// 		logrus.Debugln("toServerSocket broken. Err: ", err)
+	// 		break
+	// 	}
+	// 	logrus.Debugln("data2: ", ByteArrayToString(data2[:n]))
+	// 	//TODO: play with data
+
+	// 	_, err = toProxySocket.Write(data2[:n])
+	// 	if err != nil {
+	// 		logrus.Debugln("err: ", err)
+	// 		return
+	// 	}
+
+	// 	// case <-time.After(1 * time.Second):
+	// 	// 	logrus.Debugln("Timeout reached")
+	// 	// 	return
+	// 	// }
+	// }
 
 }
 
@@ -385,17 +509,6 @@ func containsConn(conns []net.Conn, c net.Conn) bool {
 	}
 	return false
 }
-func ByteArrayToString(bytes []byte) string {
-	var str strings.Builder
-	for _, b := range bytes {
-		if b >= 32 && b <= 126 {
-			str.WriteByte(b)
-		} else {
-			str.WriteString(fmt.Sprintf("\\x%02x", b))
-		}
-	}
-	return str.String()
-}
 
 func (ca CertificateAuthority) ssl_tls_handshake(toProxySocket net.Conn, toServerSocket net.Conn) (net.Conn, net.Conn, error) {
 	if !ca.Hostconfig.Handshake { // && !config.clientEncryption {
@@ -406,7 +519,7 @@ func (ca CertificateAuthority) ssl_tls_handshake(toProxySocket net.Conn, toServe
 	// toProxySocket.SetReadDeadline(time.Now().Add(time.Second))
 	// _, err := toProxySocket.Read(packet)
 	// if err != nil {
-	// 	fmt.Println("so error?")
+	// 	logrus.Debugln("so error?")
 	// 	panic(err)
 	// 	return toProxySocket, toServerSocket, err
 	// }
@@ -414,7 +527,7 @@ func (ca CertificateAuthority) ssl_tls_handshake(toProxySocket net.Conn, toServe
 	// if packet[0] != 0x16 || packet[1] != 0x03 {
 	// 	return toProxySocket, toServerSocket, nil
 	// }
-	// fmt.Println("So wtf happened: ", packet)
+	// logrus.Debugln("So wtf happened: ", packet)
 
 	if ca.Hostconfig.Handshake {
 		tlsConfig := &tls.Config{

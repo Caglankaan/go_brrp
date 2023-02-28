@@ -30,8 +30,10 @@ type HostConfig struct {
 }
 
 type Config struct {
-	Project string       `json:"Project"`
-	Hosts   []HostConfig `json:"Hosts"`
+	Project  string       `json:"Project"`
+	LogPath  string       `json:"log_path"`
+	LogLevel string       `json:"log_level"`
+	Hosts    []HostConfig `json:"Hosts"`
 }
 
 type GoBrrp struct {

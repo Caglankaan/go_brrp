@@ -1,13 +1,16 @@
 {
     "Project": "Some Project",
+    "log_path": "log.txt",
+    "log_level": "DEBUG",
     "Hosts": [
             {
             "local": "127.0.0.1:443",
             "original": "216.239.32.21:443",
             "host_name": "go.dev",
             "protocol": "TCP",
-            "script_path": "processing/process.go:inner:outer",
-            "handshake": true
+            "script_path": "\\src\\processing\\process.go:inner:outer",
+            "handshake": true,
+            "compile_so": true
         }
     ]
 }
