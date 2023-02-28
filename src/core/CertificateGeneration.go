@@ -12,16 +12,19 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"net"
 	"os"
+	"strings"
 	"time"
 )
 
 type CertificateAuthority struct {
-	CA       string
-	HostName string
+	CA         string
+	HostName   string
+	Hostconfig HostConfig
 }
 
-func NewCA(CA string, hostName string) *CertificateAuthority {
+func NewCA(CA string, hostName string, config HostConfig) *CertificateAuthority {
 	if hostName == "" {
 		panic("Hostname should not be empty.")
 	}
@@ -33,8 +36,9 @@ func NewCA(CA string, hostName string) *CertificateAuthority {
 	_, err := os.Stat(keyPath)
 
 	ca := &CertificateAuthority{
-		CA:       CA,
-		HostName: hostName,
+		CA:         CA,
+		HostName:   hostName,
+		Hostconfig: config,
 	}
 
 	if err != nil {
@@ -220,12 +224,216 @@ func (ca CertificateAuthority) generateCert(hostname string, caCert *x509.Certif
 	return nil
 }
 
-func (ca CertificateAuthority) SSL_CONFIG() *tls.Config {
+func (ca CertificateAuthority) SSL_CONFIG() tls.Certificate {
 	cert, err := tls.LoadX509KeyPair(CertsPath+ca.HostName+".pem", CertsPath+ca.HostName+".key")
 	if err != nil {
 		log.Fatal("Error loading certificate. ", err)
 		panic(err)
 	}
+	//https://gist.github.com/denji/12b3a568f092ab951456
+	return cert //tls.Config{Certificates: []tls.Certificate{cert}}
+}
 
-	return &tls.Config{Certificates: []tls.Certificate{cert}}
+func (ca CertificateAuthority) TcpProxy() {
+	//toProxyListener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", ca.Hostconfig.Local, config.Port))
+	//clients := []string{}
+
+	var clients = make(map[string]bool)
+
+	toProxyListener, err := net.Listen("tcp", ca.Hostconfig.Local)
+	if err != nil {
+		panic(err)
+	}
+	//defer toProxyListener.Close()
+
+	fmt.Printf("%s Proxy Listens at %s\n", ca.Hostconfig.Protocol, ca.Hostconfig.Local)
+
+	for true {
+		client, err := toProxyListener.Accept()
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				continue
+			}
+			panic(err)
+		}
+
+		go func(client net.Conn) {
+			//defer client.Close()
+
+			_, port, _ := net.SplitHostPort(client.RemoteAddr().String())
+			fmt.Println("client.RemoteAddr().String(): ", client.RemoteAddr().String())
+
+			if _, ok := clients[port]; !ok {
+				clients[port] = true
+
+				toServerConn, err := net.DialTimeout("tcp", ca.Hostconfig.Original, 10*time.Second)
+				if err != nil {
+					fmt.Printf("failed to connect to remote server: %s\n", err)
+					return
+				}
+				//defer toServerConn.Close()
+
+				toProxySSLSocket, toServerConn, err := ca.ssl_tls_handshake(client, toServerConn)
+				if err != nil {
+					fmt.Println("Err is: ", err)
+					panic(err)
+				}
+
+				// config.Processor.PassEvent(Events{
+				// 	Type: EventsNetClientConnected,
+				// 	Data: map[string]interface{}{
+				// 		"c2p_socket": toProxySSLSocket,
+				// 		"p2s_socket": toServerConn,
+				// 		"config":     config,
+				// 	},
+				// })
+
+				toProxySSLSocket.SetDeadline(time.Now().Add(5 * time.Second))
+				toServerConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+				go clientHandler(toProxySSLSocket, toServerConn)
+			}
+		}(client)
+	}
+}
+
+func readConn(conn net.Conn) <-chan []byte {
+	ch := make(chan []byte)
+	go func() {
+		buffer := make([]byte, 640000)
+		n, err := conn.Read(buffer)
+		if err != nil {
+			fmt.Println("err: ", err)
+			return
+		}
+		ch <- buffer[:n]
+	}()
+	return ch
+}
+
+func clientHandler(toProxySocket net.Conn, toServerSocket net.Conn) {
+	//var closeToProxySocket bool
+	for {
+		// select {
+		// case <-askedToQuit:
+		// 	return
+		// default:
+		//readSet := []net.Conn{toProxySocket, toServerSocket}
+		//writeSet := []net.Conn{}
+		//_, err := netutil.Poll(readSet, writeSet, time.Second)
+		// if err != nil {
+		// 	return
+		// }
+		//readable, _, _ := selectChannels([]net.Conn{toProxySocket, toServerSocket}, nil, nil, 5*time.Second)
+		// if true {
+
+		// 	data := make([]byte, 640000)
+		// 	_, err := toServerSocket.Read(data)
+		// 	if err != nil {
+		// 		fmt.Println("Error reading data from server socket: ", err)
+		// 		break
+		// 	}
+		// 	toProxySocket.Write(data)
+		// }
+		// select {
+		// case data := <-readConn(toProxySocket):
+		data1 := make([]byte, 640000)
+		n, err := toProxySocket.Read(data1)
+		if err != nil || n == 0 {
+			//closeToProxySocket = true
+			fmt.Println("closetoproxysocket broken. Err: ", err)
+			break
+		}
+		//TODO: play with data
+		fmt.Println("data1: ", ByteArrayToString(data1[:n]))
+		_, err = toServerSocket.Write(data1[:n])
+		if err != nil {
+			fmt.Println("err: ", err)
+			return
+		}
+		//case data := <-readConn(toServerSocket):
+		fmt.Println("toserversocket if?")
+		data2 := make([]byte, 640000)
+		n, err = toServerSocket.Read(data2)
+		if err != nil || n == 0 {
+			//closeToProxySocket = true
+			fmt.Println("toServerSocket broken. Err: ", err)
+			break
+		}
+		fmt.Println("data2: ", ByteArrayToString(data2[:n]))
+		//TODO: play with data
+
+		_, err = toProxySocket.Write(data2[:n])
+		if err != nil {
+			fmt.Println("err: ", err)
+			return
+		}
+
+		// case <-time.After(1 * time.Second):
+		// 	fmt.Println("Timeout reached")
+		// 	return
+		// }
+	}
+
+}
+
+func containsConn(conns []net.Conn, c net.Conn) bool {
+	for _, conn := range conns {
+		if conn == c {
+			return true
+		}
+	}
+	return false
+}
+func ByteArrayToString(bytes []byte) string {
+	var str strings.Builder
+	for _, b := range bytes {
+		if b >= 32 && b <= 126 {
+			str.WriteByte(b)
+		} else {
+			str.WriteString(fmt.Sprintf("\\x%02x", b))
+		}
+	}
+	return str.String()
+}
+
+func (ca CertificateAuthority) ssl_tls_handshake(toProxySocket net.Conn, toServerSocket net.Conn) (net.Conn, net.Conn, error) {
+	if !ca.Hostconfig.Handshake { // && !config.clientEncryption {
+		return toProxySocket, toServerSocket, nil
+	}
+
+	// packet := make([]byte, 4096)
+	// toProxySocket.SetReadDeadline(time.Now().Add(time.Second))
+	// _, err := toProxySocket.Read(packet)
+	// if err != nil {
+	// 	fmt.Println("so error?")
+	// 	panic(err)
+	// 	return toProxySocket, toServerSocket, err
+	// }
+
+	// if packet[0] != 0x16 || packet[1] != 0x03 {
+	// 	return toProxySocket, toServerSocket, nil
+	// }
+	// fmt.Println("So wtf happened: ", packet)
+
+	if ca.Hostconfig.Handshake {
+		tlsConfig := &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			Certificates:       []tls.Certificate{ca.SSL_CONFIG()},
+			InsecureSkipVerify: true,
+		}
+
+		// cert := ca.SSL_CONFIG()
+		// tlsConfig.Certificates = append(tlsConfig.Certificates, cert)
+
+		toProxySocket = tls.Server(toProxySocket, tlsConfig)
+	}
+
+	tlsConfig := &tls.Config{
+		ServerName:         ca.Hostconfig.HostName,
+		InsecureSkipVerify: true,
+	}
+
+	toServerSocket = tls.Client(toServerSocket, tlsConfig)
+	return toProxySocket, toServerSocket, nil
 }

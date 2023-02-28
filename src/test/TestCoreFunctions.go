@@ -22,7 +22,7 @@ func TestConfigParsingJson() {
 		fmt.Printf("Host %d:\n", i+1)
 		fmt.Println("  Local:", host.Local)
 		fmt.Println("  Original:", host.Original)
-		fmt.Println("  CertName:", host.CertName)
+		fmt.Println("  HostName:", host.HostName)
 		fmt.Println("  Protocol:", host.Protocol)
 		fmt.Println("  Script Path:", host.ScriptPath)
 		fmt.Println("  Handshake:", host.Handshake)

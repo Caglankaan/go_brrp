@@ -23,7 +23,7 @@ var (
 type HostConfig struct {
 	Local      string `json:"local"`
 	Original   string `json:"original"`
-	CertName   string `json:"cert_name"`
+	HostName   string `json:"host_name"`
 	Protocol   string `json:"protocol"`
 	ScriptPath string `json:"script_path"`
 	Handshake  bool   `json:"handshake"`

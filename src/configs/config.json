@@ -2,9 +2,9 @@
     "Project": "Some Project",
     "Hosts": [
             {
-            "local": "127.0.0.1:2020",
-            "original": "34.210.171.95:2020",
-            "host_name": "test_host_name.net",
+            "local": "127.0.0.1:443",
+            "original": "216.239.32.21:443",
+            "host_name": "go.dev",
             "protocol": "TCP",
             "script_path": "processing/process.go:inner:outer",
             "handshake": true

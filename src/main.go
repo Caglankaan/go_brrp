@@ -6,7 +6,8 @@ import (
 
 func main() {
 	test.TestCertificateGeneration()
-	test.TestConfigParsing()
-	test.TestConfigParsingJson()
+
+	//test.TestConfigParsing()
+	//test.TestConfigParsingJson()
 	//test.TestSocketCreation()
 }
